@@ -29,6 +29,7 @@ type GameStore = {
   retry: () => void;
   quit: () => void;
   setConfirmQuit: (value: boolean) => void;
+  craft: (recipe: "potion" | "ether" | "whetstone") => void;
 };
 
 let floaterId = 1;
@@ -81,6 +82,24 @@ export const useGame = create<GameStore>((set, get) => ({
   say: (banner) => set({ banner }),
   setMode: (mode) => set({ mode }),
   setConfirmQuit: (value) => set({ confirmQuit: value }),
+  craft: (recipe) => {
+    const run = get().run;
+    if (!run || get().phase !== "play" || get().locked) return;
+    const costs = recipe === "potion" ? { herb: 2 } : recipe === "ether" ? { crystal: 2 } : { ore: 2, fang: 1 };
+    for (const [id, amount] of Object.entries(costs)) {
+      if ((run.materials[id as keyof typeof run.materials] ?? 0) < amount) {
+        set({ banner: "No tienes materiales suficientes para esa receta." });
+        return;
+      }
+    }
+    const nextRun = structuredClone(run);
+    for (const [id, amount] of Object.entries(costs)) nextRun.materials[id as keyof typeof nextRun.materials] = (nextRun.materials[id as keyof typeof nextRun.materials] ?? 0) - amount;
+    if (recipe === "potion") nextRun.potions += 1;
+    else if (recipe === "ether") nextRun.ethers += 1;
+    else nextRun.player.atk += 1;
+    set({ run: nextRun, banner: recipe === "potion" ? "¡Fabricaste una poción!" : recipe === "ether" ? "¡Fabricaste un éter!" : "¡Piedra de afilar usada! ATK +1 permanente." });
+    blip("ui");
+  },
   start: (classId, sex) => {
     const seed = (Math.floor(Math.random() * 1e9) ^ Date.now()) >>> 0;
     const run = createRun({ classId, sex, floor: 1, seed });
@@ -182,6 +201,7 @@ export const useGame = create<GameStore>((set, get) => ({
         def: run.player.def,
         potions: run.potions,
         ethers: run.ethers,
+        materials: run.materials,
       },
     });
     set({
