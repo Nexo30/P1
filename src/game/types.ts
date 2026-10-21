@@ -13,6 +13,9 @@ export type Sex = "m" | "f";
 export type EnemyId = "goblin" | "knight" | "skeleton" | "mage" | "wolf" | "boss";
 export type Tile = "floor" | "wall";
 export type ItemId = "potion" | "ether";
+export type MaterialId = "herb" | "ore" | "crystal" | "fang";
+export type Rarity = "comun" | "poco_comun" | "raro" | "epico";
+export type GroundItem = { id: string; x: number; y: number; material: MaterialId; rarity: Rarity };
 export type Mode = "idle" | "move" | "attack" | "skill" | "item";
 export type Phase = "select" | "play" | "clear" | "victory" | "defeat";
 
@@ -51,6 +54,8 @@ export type Run = {
   props: Prop[];
   potions: number;
   ethers: number;
+  groundItems: GroundItem[];
+  materials: Partial<Record<MaterialId, number>>;
 };
 
 export type Floater = {
