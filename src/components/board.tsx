@@ -158,6 +158,18 @@ function draw(canvas: HTMLCanvasElement, metrics: { ox: number; oy: number; tile
     if (chest) ctx.drawImage(chest, item.x * tile + (tile - s) / 2, item.y * tile + tile - s - 1, s, s);
   }
 
+  const rarityColors: Record<string, string> = { comun: "#d7dce5", poco_comun: "#65e69b", raro: "#62b8ff", epico: "#d58aff" };
+  for (const item of run.groundItems) {
+    const size = tile * 0.66;
+    const img = image(`/game/material-${item.material}.png`);
+    if (!img) continue;
+    ctx.save();
+    ctx.shadowColor = rarityColors[item.rarity] || "#fff";
+    ctx.shadowBlur = item.rarity === "epico" ? 10 : item.rarity === "raro" ? 6 : 2;
+    ctx.drawImage(img, item.x * tile + (tile - size) / 2, item.y * tile + (tile - size) / 2, size, size);
+    ctx.restore();
+  }
+
   const actors = [...run.enemies, run.player].sort((a, b) => a.y - b.y);
   for (const actor of actors) drawActor(ctx, actor, tile, state.pulse);
 
