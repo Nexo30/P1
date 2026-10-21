@@ -88,6 +88,7 @@ function draw(canvas: HTMLCanvasElement, metrics: { ox: number; oy: number; tile
   const wall = image("/game/tile-wall.png");
   const stairs = image("/game/tile-stairs.png");
   const chest = image("/game/prop-chest.png");
+  const pillar = image("/game/prop-pillar.png");
 
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
@@ -149,8 +150,8 @@ function draw(canvas: HTMLCanvasElement, metrics: { ox: number; oy: number; tile
   }
 
   for (const prop of run.props) {
-    const s = tile * 0.72;
-    if (wall) ctx.drawImage(wall, prop.x * tile + (tile - s) / 2, prop.y * tile + tile - s - 2, s, s);
+    const s = tile * 0.78;
+    if (pillar) ctx.drawImage(pillar, prop.x * tile + (tile - s) / 2, prop.y * tile + tile - s - 1, s, s);
   }
   for (const item of run.chests) {
     const s = tile * 0.7;
