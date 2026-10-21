@@ -289,6 +289,12 @@ export function applyAction(run: Run, action: Action): ActionResult {
     p.y = action.y;
     const chest = draft.chests.find((c) => c.x === action.x && c.y === action.y);
     let banner = "Avanzas un paso.";
+    const loot = draft.groundItems.find((item) => item.x === action.x && item.y === action.y);
+    if (loot) {
+      draft.groundItems = draft.groundItems.filter((item) => item.id !== loot.id);
+      draft.materials[loot.material] = (draft.materials[loot.material] ?? 0) + 1;
+      banner = `Recogiste ${loot.material} (${loot.rarity.replace("_", " ")}).`;
+    }
     if (chest) {
       draft.chests = draft.chests.filter((c) => c.id !== chest.id);
       if (chest.item === "potion") {
