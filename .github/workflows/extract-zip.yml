@@ -1,0 +1,30 @@
+name: Extract uploaded workspace ZIP
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'grok-workspace.zip'
+      - '.github/workflows/extract-zip.yml'
+permissions:
+  contents: write
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract workspace into repository root
+        run: |
+          test -f grok-workspace.zip
+          mkdir -p /tmp/workspace-zip
+          unzip -o grok-workspace.zip -d /tmp/workspace-zip
+          cp -a /tmp/workspace-zip/. .
+          rm -rf /tmp/workspace-zip
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Extract grok-workspace.zip into repository"
+            git push
+          fi
