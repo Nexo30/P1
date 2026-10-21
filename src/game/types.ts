@@ -16,6 +16,9 @@ export type ItemId = "potion" | "ether";
 export type MaterialId = "herb" | "ore" | "crystal" | "fang";
 export type Rarity = "comun" | "poco_comun" | "raro" | "epico";
 export type GroundItem = { id: string; x: number; y: number; material: MaterialId; rarity: Rarity };
+export type MaterialId = "herb" | "ore" | "crystal" | "fang";
+export type Rarity = "comun" | "poco_comun" | "raro" | "epico";
+export type GroundItem = { id: string; x: number; y: number; material: MaterialId; rarity: Rarity };
 export type Mode = "idle" | "move" | "attack" | "skill" | "item";
 export type Phase = "select" | "play" | "clear" | "victory" | "defeat";
 
