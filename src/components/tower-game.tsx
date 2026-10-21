@@ -282,6 +282,7 @@ function PlayScreen() {
   const continueRun = useGame((s) => s.continueRun);
   const retry = useGame((s) => s.retry);
   const act = useGame((s) => s.act);
+  const craft = useGame((s) => s.craft);
   if (!run) return null;
   const p = run.player;
   const hpPct = Math.max(0, Math.round((p.hp / p.maxHp) * 100));
@@ -303,6 +304,17 @@ function PlayScreen() {
       <p className="text-xs text-muted">
         {PATHS[run.archetype]} · quedan {run.enemies.length} · pociones {run.potions} · éter {run.ethers}
       </p>
+      <div className="rounded-lg border border-gold/25 bg-surface/80 px-2 py-1.5">
+        <div className="mb-1 flex items-center justify-between"><span className="text-xs font-semibold text-gold">Crafteo</span><span className="text-[10px] text-muted">Pisa los objetos brillantes para recogerlos</span></div>
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg">
+          <span>🌿 Hierba {run.materials.herb ?? 0}</span><span>⛏️ Mineral {run.materials.ore ?? 0}</span><span>💎 Cristal {run.materials.crystal ?? 0}</span><span>🦷 Colmillo {run.materials.fang ?? 0}</span>
+        </div>
+        <div className="mt-1.5 grid grid-cols-3 gap-1">
+          <button type="button" disabled={phase !== "play" || locked} onClick={() => craft("potion")} className="rounded border border-emerald-400/40 px-1 py-1 text-[11px] text-fg disabled:opacity-40">🧪 Poción · 2 hierbas</button>
+          <button type="button" disabled={phase !== "play" || locked} onClick={() => craft("ether")} className="rounded border border-cyan/40 px-1 py-1 text-[11px] text-fg disabled:opacity-40">🔷 Éter · 2 cristales</button>
+          <button type="button" disabled={phase !== "play" || locked} onClick={() => craft("whetstone")} className="rounded border border-purple-400/40 px-1 py-1 text-[11px] text-fg disabled:opacity-40">⚔️ Afilar · 2 mineral + colmillo</button>
+        </div>
+      </div>
       <p className="min-h-5 text-sm text-fg" aria-live="polite">
         {banner}
       </p>
