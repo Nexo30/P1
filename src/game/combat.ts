@@ -51,6 +51,7 @@ type Carry = {
   def: number;
   potions: number;
   ethers: number;
+  materials?: Partial<Record<MaterialId, number>>;
 };
 
 export function createRun(opts: {
@@ -118,7 +119,7 @@ export function createRun(opts: {
     props: map.props,
     potions: opts.carry?.potions ?? 2,
     ethers: opts.carry?.ethers ?? 0,
-    materials: {},
+    materials: opts.carry?.materials ?? {},
     groundItems: (() => {
       const available: { x: number; y: number }[] = [];
       for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
