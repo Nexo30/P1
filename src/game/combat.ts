@@ -14,6 +14,8 @@ import {
   type ClassId,
   type Floater,
   type ItemId,
+  type MaterialId,
+  type Rarity,
   type Run,
   type Sex,
 } from "./types";
