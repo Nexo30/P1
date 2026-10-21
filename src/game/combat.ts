@@ -118,6 +118,28 @@ export function createRun(opts: {
     props: map.props,
     potions: opts.carry?.potions ?? 2,
     ethers: opts.carry?.ethers ?? 0,
+    materials: {},
+    groundItems: (() => {
+      const available: { x: number; y: number }[] = [];
+      for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+        if (map.tiles[idx(x, y)] !== "floor" || (x === map.player.x && y === map.player.y) || (x === map.stairs.x && y === map.stairs.y)) continue;
+        if (map.enemyCells.some(c => c.x === x && c.y === y) || map.chests.some(c => c.x === x && c.y === y) || map.props.some(c => c.x === x && c.y === y)) continue;
+        available.push({ x, y });
+      }
+      let seed = (opts.seed ^ (opts.floor * 9176)) >>> 0;
+      const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+      const materials: MaterialId[] = ["herb", "ore", "crystal", "fang"];
+      const rarities: Rarity[] = ["comun", "comun", "comun", "poco_comun", "poco_comun", "raro", "epico"];
+      const out: Run["groundItems"] = [];
+      for (let i = 0; i < Math.min(5, Math.floor(available.length / 5)); i++) {
+        const at = Math.floor(rand() * available.length);
+        const cell = available.splice(at, 1)[0];
+        if (!cell) continue;
+        const rarity = rarities[Math.min(rarities.length - 1, Math.floor(Math.pow(rand(), 1.8) * rarities.length))];
+        out.push({ id: `loot-${opts.floor}-${i}`, ...cell, material: materials[Math.floor(rand() * materials.length)], rarity });
+      }
+      return out;
+    })(),
   };
 }
 
