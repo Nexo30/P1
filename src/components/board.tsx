@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { attackTargets, moveOptions, skillAims } from "@/game/combat";
 import { useGame } from "@/game/store";
-import { H, W, idx, inb, type Actor } from "@/game/types";
+import { idx, inb, isWalkable, type Actor, type Prop, type Tile } from "@/game/types";
 
 const images = new Map<string, HTMLImageElement>();
 
@@ -44,7 +44,8 @@ export function Board({ onTile }: { onTile: (x: number, y: number) => void }) {
         const m = metrics.current;
         const x = Math.floor((event.clientX - rect.left - m.ox) / m.tile);
         const y = Math.floor((event.clientY - rect.top - m.oy) / m.tile);
-        if (inb(x, y)) onTile(x, y);
+        const run = useGame.getState().run;
+        if (run && inb(run, x, y)) onTile(x, y);
       }}
     />
   );
@@ -74,9 +75,9 @@ function draw(canvas: HTMLCanvasElement, metrics: { ox: number; oy: number; tile
   const state = useGame.getState();
   const run = state.run;
   if (!run) return;
-  const tile = Math.max(18, Math.floor(Math.min(bw / W, bh / H)));
-  const ox = Math.floor((bw - tile * W) / 2);
-  const oy = Math.floor((bh - tile * H) / 2);
+  const tile = Math.max(14, Math.floor(Math.min(bw / run.w, bh / run.h)));
+  const ox = Math.floor((bw - tile * run.w) / 2);
+  const oy = Math.floor((bh - tile * run.h) / 2);
   metrics.ox = ox;
   metrics.oy = oy;
   metrics.tile = tile;
@@ -86,40 +87,71 @@ function draw(canvas: HTMLCanvasElement, metrics: { ox: number; oy: number; tile
 
   const floor = image("/game/tile-floor.png");
   const wall = image("/game/tile-wall.png");
+  const grass = image("/game/tile-grass.png");
+  const bushArt = image("/game/prop-tree.png");
   const stairs = image("/game/tile-stairs.png");
   const chest = image("/game/prop-chest.png");
-  const pillar = image("/game/prop-pillar.png");
+  const forest = run.zone === "bosque";
 
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
+  const ground = (gx: number, gy: number, x: number, y: number, cell: Tile) => {
+    if (cell === "grass") {
+      if (grass) ctx.drawImage(grass, gx, gy, tile, tile);
+      else drawGrass(ctx, gx, gy, tile, x, y);
+      return;
+    }
+    if (forest) {
+      // The trodden path through the clearing, not tower flagstones.
+      drawDirt(ctx, gx, gy, tile, x, y);
+      return;
+    }
+    if (floor) ctx.drawImage(floor, gx, gy, tile, tile);
+    else {
+      ctx.fillStyle = "#1a2740";
+      ctx.fillRect(gx, gy, tile, tile);
+    }
+  };
+
+  for (let y = 0; y < run.h; y++) {
+    for (let x = 0; x < run.w; x++) {
       const gx = x * tile;
       const gy = y * tile;
-      if (run.tiles[idx(x, y)] === "wall") {
-        if (wall) ctx.drawImage(wall, gx, gy, tile, tile);
-        else {
-          ctx.fillStyle = "#0c1222";
-          ctx.fillRect(gx, gy, tile, tile);
+      const cell = run.tiles[idx(run, x, y)];
+      if (cell === "tree") {
+        ground(gx, gy, x, y, "grass");
+        if (bushArt) {
+          const s = tile * 1.34;
+          ctx.drawImage(bushArt, gx + (tile - s) / 2, gy + tile - s, s, s);
+        } else {
+          drawTree(ctx, gx, gy, tile, (x * 5 + y * 3 + run.seed) % 3);
         }
-        if (y + 1 < H && run.tiles[idx(x, y + 1)] === "floor" && ((x * 13 + y * 7 + run.seed) % 7 === 0)) {
-          ctx.fillStyle = "#e8a04a";
-          ctx.fillRect(gx + tile * 0.42, gy + tile * 0.62, tile * 0.16, tile * 0.28);
-          ctx.fillStyle = "#ffe08a";
-          ctx.fillRect(gx + tile * 0.46, gy + tile * 0.55, tile * 0.08, tile * 0.16);
+      } else if (cell === "wall") {
+        if (forest) {
+          drawThicket(ctx, gx, gy, tile, x, y);
+        } else {
+          if (wall) ctx.drawImage(wall, gx, gy, tile, tile);
+          else {
+            ctx.fillStyle = "#0c1222";
+            ctx.fillRect(gx, gy, tile, tile);
+          }
+          if (y + 1 < run.h && isWalkable(run.tiles[idx(run, x, y + 1)]) && (x * 13 + y * 7 + run.seed) % 7 === 0) {
+            ctx.fillStyle = "#e8a04a";
+            ctx.fillRect(gx + tile * 0.42, gy + tile * 0.62, tile * 0.16, tile * 0.28);
+            ctx.fillStyle = "#ffe08a";
+            ctx.fillRect(gx + tile * 0.46, gy + tile * 0.55, tile * 0.08, tile * 0.16);
+          }
         }
-      } else if (floor) ctx.drawImage(floor, gx, gy, tile, tile);
-      else {
-        ctx.fillStyle = "#1a2740";
-        ctx.fillRect(gx, gy, tile, tile);
+      } else {
+        ground(gx, gy, x, y, cell);
       }
     }
   }
 
   ctx.strokeStyle = gold;
-  ctx.globalAlpha = 0.28;
+  ctx.globalAlpha = run.zone === "bosque" ? 0.1 : 0.28;
   ctx.lineWidth = 1;
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      if (run.tiles[idx(x, y)] !== "floor") continue;
+  for (let y = 0; y < run.h; y++) {
+    for (let x = 0; x < run.w; x++) {
+      if (!isWalkable(run.tiles[idx(run, x, y)])) continue;
       ctx.strokeRect(x * tile + 0.5, y * tile + 0.5, tile - 1, tile - 1);
     }
   }
@@ -147,26 +179,51 @@ function draw(canvas: HTMLCanvasElement, metrics: { ox: number; oy: number; tile
   if (stairs) {
     const s = tile * 0.82;
     ctx.drawImage(stairs, run.stairs.x * tile + (tile - s) / 2, run.stairs.y * tile + (tile - s) / 2, s, s);
+  } else {
+    const s = tile * 0.7;
+    ctx.fillStyle = gold;
+    ctx.globalAlpha = 0.7;
+    ctx.fillRect(run.stairs.x * tile + (tile - s) / 2, run.stairs.y * tile + (tile - s) / 2, s, s);
+    ctx.globalAlpha = 1;
   }
 
-  for (const prop of run.props) {
-    const s = tile * 0.78;
-    if (pillar) ctx.drawImage(pillar, prop.x * tile + (tile - s) / 2, prop.y * tile + tile - s - 1, s, s);
-  }
+  for (const prop of run.props) drawProp(ctx, prop, tile, (prop.x * 7 + prop.y * 11) % 3);
   for (const item of run.chests) {
     const s = tile * 0.7;
     if (chest) ctx.drawImage(chest, item.x * tile + (tile - s) / 2, item.y * tile + tile - s - 1, s, s);
   }
 
-  const rarityColors: Record<string, string> = { comun: "#d7dce5", poco_comun: "#65e69b", raro: "#62b8ff", epico: "#d58aff" };
+  const rarityColors: Record<string, string> = {
+    comun: "#d7dce5",
+    raro: "#65e69b",
+    epico: "#62b8ff",
+    legendario: "#d58aff",
+  };
   for (const item of run.groundItems) {
     const size = tile * 0.66;
-    const img = image(`/game/material-${item.material}.png`);
-    if (!img) continue;
+    const tint = rarityColors[item.rarity] || "#fff";
+    const img = image(`/game/comp-${item.component}.png`);
     ctx.save();
-    ctx.shadowColor = rarityColors[item.rarity] || "#fff";
-    ctx.shadowBlur = item.rarity === "epico" ? 10 : item.rarity === "raro" ? 6 : 2;
-    ctx.drawImage(img, item.x * tile + (tile - size) / 2, item.y * tile + (tile - size) / 2, size, size);
+    ctx.shadowColor = tint;
+    ctx.shadowBlur = item.rarity === "legendario" ? 12 : item.rarity === "epico" ? 8 : 2;
+    if (img) {
+      ctx.drawImage(img, item.x * tile + (tile - size) / 2, item.y * tile + (tile - size) / 2, size, size);
+    } else {
+      // A find still has to be visible before its icon art lands.
+      const cx = item.x * tile + tile / 2;
+      const cy = item.y * tile + tile / 2;
+      const r = tile * 0.2;
+      ctx.fillStyle = tint;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - r);
+      ctx.lineTo(cx + r * 0.72, cy);
+      ctx.lineTo(cx, cy + r);
+      ctx.lineTo(cx - r * 0.72, cy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.fillRect(cx - r * 0.2, cy - r * 0.15, r * 0.4, r * 0.3);
+    }
     ctx.restore();
   }
 
@@ -191,6 +248,109 @@ function draw(canvas: HTMLCanvasElement, metrics: { ox: number; oy: number; tile
   ctx.restore();
 }
 
+function drawGrass(ctx: CanvasRenderingContext2D, gx: number, gy: number, tile: number, x: number, y: number) {
+  ctx.fillStyle = (x + y) % 2 ? "#16281c" : "#182c20";
+  ctx.fillRect(gx, gy, tile, tile);
+  ctx.fillStyle = "#1f3a28";
+  for (let i = 0; i < 3; i++) {
+    const px = gx + ((x * 7 + i * 11 + y * 3) % Math.max(1, tile - 2));
+    const py = gy + ((y * 5 + i * 17 + x * 2) % Math.max(1, tile - 2));
+    ctx.fillRect(px, py, 2, 2);
+  }
+}
+
+function drawDirt(ctx: CanvasRenderingContext2D, gx: number, gy: number, tile: number, x: number, y: number) {
+  ctx.fillStyle = "#2b2118";
+  ctx.fillRect(gx, gy, tile, tile);
+  ctx.fillStyle = "#3a2d20";
+  for (let i = 0; i < 2; i++) {
+    const px = gx + ((x * 13 + i * 7 + y * 5) % Math.max(1, tile - 3));
+    const py = gy + ((y * 11 + i * 3) % Math.max(1, tile - 3));
+    ctx.fillRect(px, py, 3, 2);
+  }
+}
+
+function drawTree(ctx: CanvasRenderingContext2D, gx: number, gy: number, tile: number, variant: number) {
+  const s = tile * 1.34;
+  const x = gx + (tile - s) / 2;
+  const y = gy + tile - s;
+  ctx.fillStyle = "#2b1d12";
+  ctx.fillRect(x + s * 0.44, y + s * 0.62, s * 0.13, s * 0.36);
+  const canopy = ["#1d3a26", "#22452c", "#1a3622"][variant] ?? "#1d3a26";
+  ctx.fillStyle = canopy;
+  for (const [ox, oy, r] of [
+    [0.3, 0.44, 0.25],
+    [0.68, 0.42, 0.23],
+    [0.5, 0.26, 0.26],
+  ]) {
+    ctx.beginPath();
+    ctx.arc(x + s * ox, y + s * oy, s * r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = "#2f5a3a";
+  ctx.beginPath();
+  ctx.arc(x + s * 0.44, y + s * 0.22, s * 0.12, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/** The forest edge: unbroken undergrowth, so the clearing has a wall of it. */
+function drawThicket(
+  ctx: CanvasRenderingContext2D,
+  gx: number,
+  gy: number,
+  tile: number,
+  x: number,
+  y: number,
+) {
+  ctx.fillStyle = "#08120d";
+  ctx.fillRect(gx, gy, tile, tile);
+  ctx.fillStyle = "#122619";
+  for (let i = 0; i < 2; i++) {
+    const px = gx + ((x * 9 + i * 13 + y * 5) % Math.max(1, tile - 6)) + 3;
+    const py = gy + ((y * 7 + i * 11 + x * 3) % Math.max(1, tile - 6)) + 3;
+    ctx.beginPath();
+    ctx.arc(px, py, tile * 0.16, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawProp(ctx: CanvasRenderingContext2D, prop: Prop, tile: number, variant: number) {
+  const art = image(`/game/prop-${prop.kind}.png`);
+  const tall = prop.kind === "pillar" || prop.kind === "stump";
+  const s = tile * (prop.kind === "bush" ? 0.6 : tall ? 0.78 : 0.62);
+  const dx = prop.x * tile + (tile - s) / 2;
+  const dy = prop.y * tile + tile - s - (tall ? 1 : 2);
+  if (art) {
+    ctx.drawImage(art, dx, dy, s, s);
+    return;
+  }
+  if (prop.kind === "bush") {
+    ctx.fillStyle = "#264a30";
+    ctx.beginPath();
+    ctx.arc(dx + s / 2, dy + s * 0.62, s * 0.42, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#31603c";
+    ctx.fillRect(dx + s * 0.3, dy + s * 0.2, s * 0.24, s * 0.3);
+    return;
+  }
+  if (prop.kind === "rock") {
+    ctx.fillStyle = ["#3a4256", "#454d63", "#333a4c"][variant] ?? "#3a4256";
+    ctx.beginPath();
+    ctx.moveTo(dx, dy + s);
+    ctx.lineTo(dx + s * 0.28, dy + s * 0.2);
+    ctx.lineTo(dx + s * 0.74, dy + s * 0.1);
+    ctx.lineTo(dx + s, dy + s);
+    ctx.closePath();
+    ctx.fill();
+    return;
+  }
+  // pillar and stump both read as a worked vertical block
+  ctx.fillStyle = prop.kind === "pillar" ? "#2b3450" : "#4a3524";
+  ctx.fillRect(dx + s * 0.14, dy + s * 0.1, s * 0.72, s * 0.9);
+  ctx.fillStyle = prop.kind === "pillar" ? "#3d4a6e" : "#5f4630";
+  ctx.fillRect(dx, dy, s, s * 0.18);
+}
+
 function drawActor(
   ctx: CanvasRenderingContext2D,
   actor: Actor,
@@ -206,11 +366,17 @@ function drawActor(
     oy = (pulse.y - actor.y) * tile * 0.28 * k;
   }
   const boss = actor.enemyId === "boss";
-  const dw = tile * (boss ? 1.15 : 0.92);
-  const dh = tile * (boss ? 1.55 : 1.32);
-  const dx = actor.x * tile + (tile - dw) / 2 + ox;
-  const dy = actor.y * tile + tile - dh + 4 + oy + bob;
   const img = image(`/game/${actor.sprite}.png`);
+  // Sprites keep their own proportions: fit inside a box and drop the feet on the tile line.
+  const boxW = tile * (boss ? 1.75 : 1.5);
+  const boxH = tile * (boss ? 1.8 : 1.34);
+  const fit = img
+    ? Math.min(boxW / img.naturalWidth, boxH / img.naturalHeight)
+    : 1;
+  const dw = img ? img.naturalWidth * fit : tile * 0.72;
+  const dh = img ? img.naturalHeight * fit : tile * 0.9;
+  const dx = actor.x * tile + (tile - dw) / 2 + ox;
+  const dy = actor.y * tile + tile - dh + 3 + oy + bob;
   ctx.save();
   ctx.translate(dx + dw / 2, dy + dh / 2);
   ctx.scale(actor.facing, 1);

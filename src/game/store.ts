@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { blip } from "./audio";
-import { CLASSES, PATHS } from "./data";
-import { applyAction, applyEnemy, createRun, type FloaterIn } from "./combat";
+import { CLASSES, FOREST_NAME, PATHS } from "./data";
+import { applyAction, applyEnemy, createRun, forge, type FloaterIn } from "./combat";
+import { recipeById } from "./crafting";
 import type { Action, ClassId, Floater, Mode, Phase, Run, Sex } from "./types";
 import { cheb } from "./types";
 
@@ -29,7 +30,7 @@ type GameStore = {
   retry: () => void;
   quit: () => void;
   setConfirmQuit: (value: boolean) => void;
-  craft: (recipe: "potion" | "ether" | "whetstone") => void;
+  craft: (recipeId: string) => void;
 };
 
 let floaterId = 1;
@@ -56,8 +57,15 @@ function remember(floor: number) {
   }
 }
 
+declare global {
+  interface Window {
+    __torre?: { getState: () => GameStore };
+  }
+}
+
 export const useGame = create<GameStore>((set, get) => ({
   phase: "select",
+
   pick: null,
   run: null,
   checkpoint: null,
@@ -82,27 +90,30 @@ export const useGame = create<GameStore>((set, get) => ({
   say: (banner) => set({ banner }),
   setMode: (mode) => set({ mode }),
   setConfirmQuit: (value) => set({ confirmQuit: value }),
-  craft: (recipe) => {
-    const run = get().run;
-    if (!run || get().phase !== "play" || get().locked) return;
-    const costs = recipe === "potion" ? { herb: 2 } : recipe === "ether" ? { crystal: 2 } : { ore: 2, fang: 1 };
-    for (const [id, amount] of Object.entries(costs)) {
-      if ((run.materials[id as keyof typeof run.materials] ?? 0) < amount) {
-        set({ banner: "No tienes materiales suficientes para esa receta." });
-        return;
-      }
+  craft: (recipeId) => {
+    const state = get();
+    const run = state.run;
+    if (!run || state.locked || (state.phase !== "play" && state.phase !== "clear")) return;
+    const recipe = recipeById(recipeId);
+    if (!recipe) return;
+    const made = forge(run, recipe);
+    if (!made.ok) {
+      set({ banner: made.reason });
+      blip("ui");
+      return;
     }
-    const nextRun = structuredClone(run);
-    for (const [id, amount] of Object.entries(costs)) nextRun.materials[id as keyof typeof nextRun.materials] = (nextRun.materials[id as keyof typeof nextRun.materials] ?? 0) - amount;
-    if (recipe === "potion") nextRun.potions += 1;
-    else if (recipe === "ether") nextRun.ethers += 1;
-    else nextRun.player.atk += 1;
-    set({ run: nextRun, banner: recipe === "potion" ? "¡Fabricaste una poción!" : recipe === "ether" ? "¡Fabricaste un éter!" : "¡Piedra de afilar usada! ATK +1 permanente." });
-    blip("ui");
+    // Forging between floors is free; with enemies still breathing it costs the turn.
+    if (state.phase === "play" && run.enemies.length) void state.act({ type: "forge", recipe: recipeId });
+    else {
+      const next = structuredClone(run);
+      forge(next, recipe);
+      set({ run: next, banner: made.text });
+      blip("skill");
+    }
   },
   start: (classId, sex) => {
     const seed = (Math.floor(Math.random() * 1e9) ^ Date.now()) >>> 0;
-    const run = createRun({ classId, sex, floor: 1, seed });
+    const run = createRun({ classId, sex, floor: 0, seed });
     set({
       phase: "play",
       pick: { classId, sex },
@@ -110,7 +121,7 @@ export const useGame = create<GameStore>((set, get) => ({
       checkpoint: structuredClone(run),
       mode: "idle",
       locked: false,
-      banner: `${PATHS[run.archetype]}. Tu turno.`,
+      banner: `${FOREST_NAME}. Recoge lo que sirva para forjar; la puerta espera al norte.`,
       floaters: [],
       pulse: null,
       shake: 0,
@@ -142,6 +153,12 @@ export const useGame = create<GameStore>((set, get) => ({
     if (get().run!.player.hp <= 0) {
       set({ phase: "defeat", locked: false, banner: "Has caído." });
       blip("lose");
+      return;
+    }
+    // The forest has nothing to kill: its turn ends when you reach the door.
+    if (get().run!.zone === "bosque") {
+      if (atDoor(get().run!)) finishFloor();
+      else set({ locked: false, mode: "idle", banner: "Tu turno." });
       return;
     }
     if (get().run!.enemies.length === 0) {
@@ -185,8 +202,10 @@ export const useGame = create<GameStore>((set, get) => ({
       return;
     }
     const cls = CLASSES[pick.classId];
-    const maxHp = run.player.maxHp + cls.growthHp;
-    const atk = run.player.atk + cls.growthAtk;
+    // The forest is a prelude: no growth, only what you gathered walks in with you.
+    const prelude = run.floor <= 0;
+    const maxHp = prelude ? run.player.maxHp : run.player.maxHp + cls.growthHp;
+    const atk = prelude ? run.player.atk : run.player.atk + cls.growthAtk;
     const next = createRun({
       classId: pick.classId,
       sex: pick.sex,
@@ -194,14 +213,15 @@ export const useGame = create<GameStore>((set, get) => ({
       seed: run.seed,
       carry: {
         maxHp,
-        hp: Math.min(maxHp, run.player.hp + Math.round(maxHp * 0.42)),
+        hp: Math.min(maxHp, run.player.hp + (prelude ? 0 : Math.round(maxHp * 0.42))),
         maxMp: run.player.maxMp,
-        mp: Math.min(run.player.maxMp, run.player.mp + 4),
+        mp: Math.min(run.player.maxMp, run.player.mp + (prelude ? 0 : 4)),
         atk,
         def: run.player.def,
-        potions: run.potions,
-        ethers: run.ethers,
-        materials: run.materials,
+        items: run.items,
+        components: run.components,
+        equipment: run.equipment,
+        bonus: run.bonus,
       },
     });
     set({
@@ -210,7 +230,9 @@ export const useGame = create<GameStore>((set, get) => ({
       checkpoint: structuredClone(next),
       mode: "idle",
       locked: false,
-      banner: `${PATHS[next.archetype]}. Piso ${next.floor}.`,
+      banner: prelude
+        ? `${PATHS[next.archetype]}. Piso 1. Empieza la torre.`
+        : `${PATHS[next.archetype]}. Piso ${next.floor}.`,
       floaters: [],
       pulse: null,
       epoch: get().epoch + 1,
@@ -248,9 +270,22 @@ export const useGame = create<GameStore>((set, get) => ({
   },
 }));
 
+function atDoor(run: Run) {
+  return run.player.x === run.stairs.x && run.player.y === run.stairs.y;
+}
+
 function finishFloor() {
   const run = useGame.getState().run;
   if (!run) return;
+  if (run.zone === "bosque") {
+    useGame.setState({
+      phase: "clear",
+      locked: false,
+      banner: "La puerta de la torre se abre ante ti.",
+    });
+    blip("win");
+    return;
+  }
   const best = remember(run.floor);
   if (run.floor >= 10) {
     useGame.setState({ phase: "victory", best, locked: false, banner: "La cima es tuya." });
@@ -260,3 +295,6 @@ function finishFloor() {
     blip("win");
   }
 }
+
+// The browser harness needs to read the live run; SSR and production builds skip it.
+if (import.meta.env.DEV && typeof window !== "undefined") window.__torre = useGame;

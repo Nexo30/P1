@@ -1,4 +1,4 @@
-import type { ClassId, EnemyId } from "./types";
+import type { ClassId, ComponentId, EnemyId } from "./types";
 
 export type ClassDef = {
   title: string;
@@ -86,6 +86,9 @@ export const CLASSES: Record<ClassId, ClassDef> = {
 
 export const CLASS_ORDER: ClassId[] = ["guerrero", "maga", "arquero", "asesino"];
 
+/** The clearing you wake in: gathering, no fighting. */
+export const FOREST_NAME = "El claro del bosque";
+
 export const PATHS = [
   "Sala de columnas",
   "Pasillo partido",
@@ -105,28 +108,138 @@ type EnemyDef = {
   range: number;
   hpG: number;
   atkG: number;
+  /** Components this creature leaves behind when it falls. */
+  drops: ComponentId[];
+  /** How many of those drops it tends to leave, before rarity scaling. */
+  dropCount?: number;
 };
 
 export const ENEMIES: Record<EnemyId, EnemyDef> = {
-  goblin: { name: "Goblin", hp: 12, atk: 4, def: 0, range: 1, hpG: 2, atkG: 0.45 },
-  skeleton: { name: "Esqueleto", hp: 14, atk: 5, def: 1, range: 1, hpG: 2, atkG: 0.5 },
-  wolf: { name: "Lobo", hp: 11, atk: 6, def: 0, range: 1, hpG: 2, atkG: 0.5 },
-  knight: { name: "Caballero espectral", hp: 20, atk: 6, def: 3, range: 1, hpG: 3, atkG: 0.4 },
-  mage: { name: "Mago oscuro", hp: 13, atk: 7, def: 0, range: 3, hpG: 2, atkG: 0.45 },
-  boss: { name: "Guardián", hp: 72, atk: 11, def: 3, range: 1, hpG: 0, atkG: 0 },
+  goblin: {
+    name: "Goblin",
+    hp: 12,
+    atk: 4,
+    def: 0,
+    range: 1,
+    hpG: 2,
+    atkG: 0.45,
+    drops: ["rama", "trapo"],
+  },
+  skeleton: {
+    name: "Esqueleto",
+    hp: 14,
+    atk: 5,
+    def: 1,
+    range: 1,
+    hpG: 2,
+    atkG: 0.5,
+    drops: ["hueso", "piedra"],
+  },
+  wolf: {
+    name: "Lobo",
+    hp: 11,
+    atk: 6,
+    def: 0,
+    range: 1,
+    hpG: 2,
+    atkG: 0.5,
+    drops: ["colmillo", "trapo"],
+  },
+  bat: {
+    name: "Murciélago",
+    hp: 8,
+    atk: 5,
+    def: 0,
+    range: 1,
+    hpG: 1.5,
+    atkG: 0.4,
+    drops: ["hueso", "trapo"],
+  },
+  spider: {
+    name: "Araña tejedientas",
+    hp: 13,
+    atk: 5,
+    def: 1,
+    range: 1,
+    hpG: 2,
+    atkG: 0.45,
+    drops: ["seda"],
+  },
+  knight: {
+    name: "Caballero espectral",
+    hp: 20,
+    atk: 6,
+    def: 3,
+    range: 1,
+    hpG: 3,
+    atkG: 0.4,
+    drops: ["hierro", "esencia"],
+  },
+  mage: {
+    name: "Mago oscuro",
+    hp: 13,
+    atk: 7,
+    def: 0,
+    range: 3,
+    hpG: 2,
+    atkG: 0.45,
+    drops: ["cristal", "esencia"],
+  },
+  golem: {
+    name: "Gólem de la torre",
+    hp: 26,
+    atk: 6,
+    def: 5,
+    range: 1,
+    hpG: 3,
+    atkG: 0.35,
+    drops: ["piedra", "hierro"],
+  },
+  specter: {
+    name: "Espectro",
+    hp: 15,
+    atk: 8,
+    def: 1,
+    range: 2,
+    hpG: 2,
+    atkG: 0.5,
+    drops: ["seda", "esencia"],
+  },
+  king: {
+    name: "Rey Esqueleto",
+    hp: 44,
+    atk: 9,
+    def: 4,
+    range: 1,
+    hpG: 0,
+    atkG: 0,
+    drops: ["nucleo", "hueso"],
+    dropCount: 2,
+  },
+  boss: {
+    name: "Guardián",
+    hp: 72,
+    atk: 11,
+    def: 3,
+    range: 1,
+    hpG: 0,
+    atkG: 0,
+    drops: ["nucleo", "esencia"],
+    dropCount: 3,
+  },
 };
 
 export const FLOOR_ENEMIES: EnemyId[][] = [
-  ["goblin", "goblin", "goblin"],
-  ["goblin", "goblin", "goblin", "skeleton"],
-  ["goblin", "skeleton", "skeleton", "wolf"],
-  ["wolf", "wolf", "skeleton", "skeleton"],
-  ["knight", "goblin", "goblin", "skeleton"],
-  ["mage", "mage", "skeleton", "wolf"],
-  ["knight", "mage", "wolf", "skeleton"],
-  ["knight", "knight", "mage", "wolf"],
-  ["knight", "mage", "mage", "wolf"],
-  ["boss", "skeleton"],
+  ["goblin", "goblin", "bat"],
+  ["goblin", "bat", "skeleton"],
+  ["skeleton", "wolf", "goblin", "bat"],
+  ["wolf", "skeleton", "spider"],
+  ["spider", "wolf", "knight", "bat"],
+  ["mage", "spider", "skeleton", "knight"],
+  ["golem", "knight", "mage", "wolf"],
+  ["specter", "golem", "mage", "spider"],
+  ["king", "specter", "knight", "golem"],
+  ["boss", "specter", "mage"],
 ];
 
 export function skillMult(id: ClassId) {

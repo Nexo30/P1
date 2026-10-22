@@ -1,5 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import {
+  Anvil,
   Backpack,
   ChevronDown,
   ChevronLeft,
@@ -10,12 +11,27 @@ import {
   Sparkles,
   Sword,
   Target,
+  X,
 } from "lucide-react";
 import { unlockAudio } from "@/game/audio";
 import { attackTargets, bestAim, moveOptions, skillAims } from "@/game/combat";
-import { CLASS_ORDER, CLASSES, PATHS } from "@/game/data";
+import {
+  canAfford,
+  COMPONENTS,
+  have,
+  ITEMS,
+  RECIPES,
+  recipeById,
+  shortfallText,
+  spriteFor,
+  TIER_FLOOR,
+  TIERS,
+  TIER_ORDER,
+  unlockedTier,
+} from "@/game/crafting";
+import { CLASS_ORDER, CLASSES, FOREST_NAME, PATHS } from "@/game/data";
 import { useGame } from "@/game/store";
-import type { ClassId, Sex } from "@/game/types";
+import type { ClassId, ComponentId, ItemId, Run, Sex } from "@/game/types";
 import { Board } from "@/components/board";
 
 const ICONS = {
@@ -24,6 +40,8 @@ const ICONS = {
   arquero: Target,
   asesino: Footprints,
 } as const;
+
+const BAG: ItemId[] = ["potion", "ether", "bomb", "panacea"];
 
 function pressMove() {
   const s = useGame.getState();
@@ -81,20 +99,27 @@ function pressSkill() {
 function pressItem() {
   const s = useGame.getState();
   if (!s.run || s.locked) return;
-  if (!s.run.potions && !s.run.ethers) {
-    s.say("No tienes objetos.");
+  const owned = BAG.filter((id) => (s.run!.items[id] ?? 0) > 0);
+  if (!owned.length) {
+    s.say("La mochila está vacía.");
     return;
   }
-  if (s.run.potions && !s.run.ethers) {
-    void s.act({ type: "item", item: "potion" });
+  if (owned.length === 1) {
+    void s.act({ type: "item", item: owned[0] });
     return;
   }
-  if (s.run.ethers && !s.run.potions) {
-    void s.act({ type: "item", item: "ether" });
+  if (s.mode === "item") {
+    void s.act({ type: "item", item: owned[0] });
     return;
   }
   s.setMode("item");
-  s.say("Elige poción o éter.");
+  s.say("Elige un objeto.");
+}
+
+function pressForge() {
+  const s = useGame.getState();
+  if (!s.run) return;
+  s.setMode(s.mode === "forge" ? "idle" : "forge");
 }
 
 function step(dx: number, dy: number) {
@@ -147,6 +172,7 @@ export function TowerGame() {
       else if (event.code === "Digit2") pressAttack();
       else if (event.code === "Digit3") pressSkill();
       else if (event.code === "Digit4") pressItem();
+      else if (event.code === "KeyF") pressForge();
       else if (event.code === "Digit5" || event.code === "Space") {
         event.preventDefault();
         void s.act({ type: "wait" });
@@ -196,7 +222,8 @@ function SelectScreen() {
           <h1 className="font-display text-4xl text-fg">La Torre</h1>
         </header>
         <p className="text-sm text-muted">
-          Elige clase y sexo. Cada turno es una sola acción. Después se mueven ellos.
+          Elige clase y sexo. Empiezas en el claro, sin prisa: recoge ramas, piedras y hierba para
+          forjar. Después, un solo paso por turno y ellos se mueven detrás.
         </p>
         {best > 0 ? <p className="text-sm text-gold">Mejor ascenso: piso {best}</p> : null}
         <div className="grid grid-cols-2 gap-3">
@@ -217,7 +244,7 @@ function SelectScreen() {
           onClick={() => pick && start(pick.classId, pick.sex)}
           className="h-12 rounded-lg bg-gold font-semibold text-bg disabled:opacity-40"
         >
-          Entrar en la torre
+          Entrar al claro
         </button>
       </section>
     </main>
@@ -289,54 +316,59 @@ function PlayScreen() {
   const mpPct = p.maxMp ? Math.max(0, Math.round((p.mp / p.maxMp) * 100)) : 0;
 
   return (
-    <main className="mx-auto flex h-dvh max-w-lg flex-col gap-2 overflow-hidden p-3 select-none">
+    <main className="mx-auto flex min-h-dvh max-w-lg flex-col gap-2 p-3 pb-6 select-none">
       <header className="flex items-center gap-3">
         <img src={`/game/${p.sprite}.png`} alt="" className="h-14 w-12 object-contain" />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline justify-between gap-2">
             <h1 className="font-display truncate text-lg text-fg">{p.name}</h1>
-            <p className="text-xs text-gold">Piso {run.floor}/10</p>
+            <p className="text-xs text-gold">
+              {run.zone === "bosque" ? "El bosque" : `Piso ${run.floor}/10`}
+            </p>
           </div>
           <Meter label="HP" value={`${p.hp}/${p.maxHp}`} pct={hpPct} tone="hp" />
           <Meter label="MP" value={`${p.mp}/${p.maxMp}`} pct={mpPct} tone="mp" />
         </div>
       </header>
       <p className="text-xs text-muted">
-        {PATHS[run.archetype]} · quedan {run.enemies.length} · pociones {run.potions} · éter {run.ethers}
+        {run.zone === "bosque"
+          ? `${FOREST_NAME} · sin enemigos · ATK ${p.atk} · DEF ${p.def}`
+          : `${PATHS[run.archetype]} · quedan ${run.enemies.length} · ATK ${p.atk} · DEF ${p.def}`}
       </p>
-      <div className="rounded-lg border border-gold/25 bg-surface/80 px-2 py-1.5">
-        <div className="mb-1 flex items-center justify-between"><span className="text-xs font-semibold text-gold">Crafteo</span><span className="text-[10px] text-muted">Pisa los objetos brillantes para recogerlos</span></div>
-        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-fg">
-          <span>🌿 Hierba {run.materials.herb ?? 0}</span><span>⛏️ Mineral {run.materials.ore ?? 0}</span><span>💎 Cristal {run.materials.crystal ?? 0}</span><span>🦷 Colmillo {run.materials.fang ?? 0}</span>
-        </div>
-        <div className="mt-1.5 grid grid-cols-3 gap-1">
-          <button type="button" disabled={phase !== "play" || locked} onClick={() => craft("potion")} className="rounded border border-emerald-400/40 px-1 py-1 text-[11px] text-fg disabled:opacity-40">🧪 Poción · 2 hierbas</button>
-          <button type="button" disabled={phase !== "play" || locked} onClick={() => craft("ether")} className="rounded border border-cyan/40 px-1 py-1 text-[11px] text-fg disabled:opacity-40">🔷 Éter · 2 cristales</button>
-          <button type="button" disabled={phase !== "play" || locked} onClick={() => craft("whetstone")} className="rounded border border-purple-400/40 px-1 py-1 text-[11px] text-fg disabled:opacity-40">⚔️ Afilar · 2 mineral + colmillo</button>
-        </div>
-      </div>
+      <Satchel run={run} onForge={pressForge} />
       <p className="min-h-5 text-sm text-fg" aria-live="polite">
         {banner}
       </p>
-      <div className="relative min-h-0 flex-1">
+      <div
+        className="relative mx-auto w-full max-w-[560px]"
+        style={{ aspectRatio: `${run.w} / ${run.h}`, maxHeight: "68dvh" }}
+      >
         <Board onTile={onTile} />
         {phase !== "play" ? (
           <div className="absolute inset-0 flex items-center justify-center bg-bg/75 p-4">
             <div className="w-full max-w-xs rounded-lg border border-gold/40 bg-surface p-4 text-center">
               <h2 className="font-display text-2xl text-fg">
-                {phase === "victory" ? "Cima" : phase === "clear" ? `Piso ${run.floor} limpio` : "Has caído"}
+                {phase === "victory"
+                  ? "Cima"
+                  : phase === "clear"
+                    ? run.zone === "bosque"
+                      ? "El linde"
+                      : `Piso ${run.floor} limpio`
+                    : "Has caído"}
               </h2>
               <p className="mt-2 text-sm text-muted">
                 {phase === "victory"
                   ? "Diez pisos. Llegaste como quisiste."
                   : phase === "clear"
-                    ? "Los enemigos cayeron. Puedes subir."
+                    ? run.zone === "bosque"
+                      ? "Lo que reuniste en el claro te sigue dentro."
+                      : "Los enemigos cayeron. Puedes subir."
                     : "La torre se queda con este intento."}
               </p>
               <div className="mt-4 flex flex-col gap-2">
                 {phase === "clear" ? (
                   <button type="button" onClick={continueRun} className="h-12 rounded-lg bg-gold font-semibold text-bg">
-                    Subir al piso {run.floor + 1}
+                    {run.zone === "bosque" ? "Entrar en la torre" : `Subir al piso ${run.floor + 1}`}
                   </button>
                 ) : null}
                 {phase === "victory" ? (
@@ -362,13 +394,22 @@ function PlayScreen() {
       {phase === "play" ? (
         <>
           {mode === "item" ? (
-            <div className="grid grid-cols-2 gap-2">
-              <button type="button" onClick={() => void act({ type: "item", item: "potion" })} className="h-11 rounded-lg border border-gold/40 bg-surface text-sm">
-                Poción ({run.potions})
-              </button>
-              <button type="button" onClick={() => void act({ type: "item", item: "ether" })} className="h-11 rounded-lg border border-gold/40 bg-surface text-sm">
-                Éter ({run.ethers})
-              </button>
+            <div className="grid grid-cols-4 gap-1">
+              {BAG.map((id) => {
+                const count = run.items[id] ?? 0;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    disabled={!count || locked}
+                    onClick={() => void act({ type: "item", item: id })}
+                    className="flex h-14 flex-col items-center justify-center gap-0.5 rounded-lg border border-gold/40 bg-surface text-[11px] text-fg disabled:opacity-35"
+                  >
+                    <Sprite name={ITEMS[id].sprite} className="size-6" />
+                    {ITEMS[id].name} x{count}
+                  </button>
+                );
+              })}
             </div>
           ) : null}
           <div className="mx-auto grid w-44 grid-cols-3 gap-1">
@@ -387,11 +428,12 @@ function PlayScreen() {
               <ChevronRight className="size-5" />
             </Pad>
           </div>
-          <div className="grid grid-cols-5 gap-1">
+          <div className="grid grid-cols-6 gap-1">
             <Action icon={Footprints} label="Mover" pressed={mode === "move"} disabled={locked} onClick={pressMove} />
             <Action icon={Sword} label="Atacar" pressed={mode === "attack"} disabled={locked} onClick={pressAttack} />
             <Action icon={Sparkles} label="Poder" pressed={mode === "skill"} disabled={locked} onClick={pressSkill} />
             <Action icon={Backpack} label="Ítem" pressed={mode === "item"} disabled={locked} onClick={pressItem} />
+            <Action icon={Anvil} label="Forjar" pressed={mode === "forge"} disabled={false} onClick={pressForge} />
             <Action icon={Hourglass} label="Esperar" pressed={false} disabled={locked} onClick={() => void act({ type: "wait" })} />
           </div>
           <div className="flex justify-end">
@@ -407,7 +449,129 @@ function PlayScreen() {
           </div>
         </>
       ) : null}
+      {mode === "forge" ? <ForgeSheet run={run} craft={craft} onClose={pressForge} /> : null}
     </main>
+  );
+}
+
+/** A sprite cell that stays quiet while its PNG is still missing. */
+function Sprite({ name, className }: { name: string; className?: string }) {
+  return (
+    <img
+      src={`/game/${name}.png`}
+      alt=""
+      className={`shrink-0 [image-rendering:pixelated] ${className ?? "size-8"}`}
+      onError={(event) => {
+        event.currentTarget.style.opacity = "0";
+      }}
+    />
+  );
+}
+
+function Satchel({ run, onForge }: { run: Run; onForge: () => void }) {
+  const owned = (Object.keys(run.components) as ComponentId[]).filter((id) => have(run, id) > 0);
+  const gear = (["weapon", "armor", "trinket"] as const)
+    .map((slot) => recipeById(run.equipment[slot] ?? "")?.name)
+    .filter(Boolean);
+  const seal = run.bonus.atk + run.bonus.def;
+  return (
+    <div className="rounded-lg border border-gold/25 bg-surface/80 px-2 py-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-semibold text-gold">Alforja</span>
+        <button type="button" onClick={onForge} className="rounded-md border border-gold/40 px-2 py-0.5 text-[11px] text-fg">
+          Forjar
+        </button>
+      </div>
+      <div className="mt-1 flex gap-3 overflow-x-auto text-[11px]">
+        {owned.length ? (
+          owned.map((id) => (
+            <span key={id} className="flex shrink-0 items-center gap-1" style={{ color: TIERS[COMPONENTS[id].tier].color }}>
+              <Sprite name={`comp-${id}`} className="size-4" />
+              {COMPONENTS[id].name} x{have(run, id)}
+            </span>
+          ))
+        ) : (
+          <span className="text-muted">Sin materiales: pisa el botín del suelo.</span>
+        )}
+      </div>
+      <p className="mt-1 text-[10px] text-muted">
+        {gear.length ? `Equipo: ${gear.join(" · ")}` : "Equipo: nada forjado"}
+        {seal ? ` · sello +${run.bonus.atk} ATK +${run.bonus.def} DEF` : ""}
+      </p>
+    </div>
+  );
+}
+
+function ForgeSheet({ run, craft, onClose }: { run: Run; craft: (id: string) => void; onClose: () => void }) {
+  const open = unlockedTier(run.floor);
+  return (
+    <div className="fixed inset-0 z-40 flex flex-col bg-bg/95">
+      <header className="flex items-center justify-between gap-2 border-b border-gold/25 px-3 py-2">
+        <div>
+          <h2 className="font-display text-lg text-fg">Forja</h2>
+          <p className="text-[10px] text-muted">
+            {run.enemies.length
+              ? "Forjar gasta el turno."
+              : run.zone === "bosque"
+                ? "En el claro no hay prisa: forjar es gratis."
+                : "Piso limpio: forjar es gratis."}
+          </p>
+        </div>
+        <button type="button" aria-label="Cerrar la forja" onClick={onClose} className="rounded-md border border-gold/40 p-1.5 text-muted">
+          <X className="size-4" />
+        </button>
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+        {TIER_ORDER.map((tier) => {
+          const sealed = TIER_ORDER.indexOf(tier) > TIER_ORDER.indexOf(open);
+          const list = RECIPES.filter((r) => r.tier === tier);
+          return (
+            <section key={tier} className="mb-3">
+              <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider" style={{ color: TIERS[tier].color }}>
+                {TIERS[tier].label}
+              </h3>
+              {sealed ? (
+                <p className="text-[11px] text-muted">Se abre en el piso {TIER_FLOOR[tier]}.</p>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  {list.map((recipe) => {
+                    const ready = canAfford(run, recipe);
+                    return (
+                      <article
+                        key={recipe.id}
+                        className={`flex items-center gap-2 rounded-md border px-2 py-1 ${
+                          ready ? "border-gold/40 bg-surface" : "border-gold/10 bg-surface/40"
+                        }`}
+                      >
+                        <Sprite name={spriteFor(recipe)} className="size-8" />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-semibold text-fg">{recipe.name}</p>
+                          <p className="truncate text-[10px] text-muted">{recipe.effect}</p>
+                          <p className={`truncate text-[10px] ${ready ? "text-muted" : "text-hp"}`}>
+                            {Object.entries(recipe.cost)
+                              .map(([id, n]) => `${n} ${COMPONENTS[id as ComponentId].name}`)
+                              .join(", ")}
+                            {ready ? "" : ` · falta ${shortfallText(run, recipe)}`}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={!ready}
+                          onClick={() => craft(recipe.id)}
+                          className="shrink-0 rounded-md bg-gold px-2 py-1 text-[11px] font-semibold text-bg disabled:bg-surface-2 disabled:text-muted"
+                        >
+                          Forjar
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

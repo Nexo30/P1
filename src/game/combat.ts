@@ -1,21 +1,36 @@
-import { CLASSES, FLOOR_ENEMIES, critChance, enemyStats, skillMult } from "./data";
+import { CLASSES, ENEMIES, FLOOR_ENEMIES, critChance, enemyStats, skillMult } from "./data";
 import { generateMap } from "./dungeon";
 import { next } from "./rng";
 import {
+  canAfford,
+  COMPONENTS,
+  ITEMS,
+  RAW_COMPONENTS,
+  recipeById,
+  shortfallText,
+  TIER_FLOOR,
+  TIERS,
+  TIER_ORDER,
+  tierAtLeast,
+  unlockedTier,
+  type Recipe,
+} from "./crafting";
+import type { Tier } from "./types";
+import {
   DIRS,
-  H,
-  W,
   cheb,
   idx,
   inb,
+  isSolid,
+  isWalkable,
   type Action,
   type Actor,
   type Aim,
   type ClassId,
+  type ComponentId,
+  type EnemyId,
   type Floater,
   type ItemId,
-  type MaterialId,
-  type Rarity,
   type Run,
   type Sex,
 } from "./types";
@@ -49,10 +64,90 @@ type Carry = {
   maxMp: number;
   atk: number;
   def: number;
-  potions: number;
-  ethers: number;
-  materials?: Partial<Record<MaterialId, number>>;
+  items?: Partial<Record<ItemId, number>>;
+  components?: Partial<Record<ComponentId, number>>;
+  equipment?: Run["equipment"];
+  bonus?: Run["bonus"];
 };
+
+const TIER_WEIGHTS: [Tier, number][] = [
+  ["comun", 60],
+  ["raro", 27],
+  ["epico", 11],
+  ["legendario", 2],
+];
+
+/** Deeper floors tilt the roll toward richer finds. */
+function rollRarity(rand: () => number, floor: number): Tier {
+  const boost = Math.min(30, (floor - 1) * 3.5);
+  const weights = TIER_WEIGHTS.map(([tier, w], i) => {
+    if (i === 0) return [tier, Math.max(8, w - boost * 1.6)] as [Tier, number];
+    if (i === 1) return [tier, w + boost * 0.5] as [Tier, number];
+    if (i === 2) return [tier, w + boost * 0.7] as [Tier, number];
+    return [tier, w + boost * 0.4] as [Tier, number];
+  });
+  const total = weights.reduce((s, [, w]) => s + w, 0);
+  let pick = rand() * total;
+  for (const [tier, w] of weights) {
+    pick -= w;
+    if (pick <= 0) return tier;
+  }
+  return "comun";
+}
+
+/** A find's rarity caps what it can be: no legendary herb, no common core. */
+function rollComponent(rand: () => number, rarity: Tier): ComponentId {
+  const ceiling = TIER_ORDER.indexOf(rarity);
+  const pool = RAW_COMPONENTS.filter((c) => TIER_ORDER.indexOf(COMPONENTS[c].tier) <= ceiling);
+  return pool[Math.floor(rand() * pool.length)] ?? "rama";
+}
+
+export function makeLoot(
+  rand: () => number,
+  floor: number,
+  forced?: ComponentId,
+): { component: ComponentId; rarity: Tier } {
+  const rarity = rollRarity(rand, floor);
+  if (forced) {
+    const own = COMPONENTS[forced].tier;
+    return { component: forced, rarity: rank(own) > rank(rarity) ? own : rarity };
+  }
+  return { component: rollComponent(rand, rarity), rarity };
+}
+
+function rank(t: Tier) {
+  return TIER_ORDER.indexOf(t);
+}
+
+/** Rarity is not decoration: a richer find yields more of the component. */
+function collect(draft: Run, loot: Run["groundItems"]): string {
+  const parts: string[] = [];
+  for (const item of loot) {
+    const gain = TIERS[item.rarity].yield;
+    draft.components[item.component] = (draft.components[item.component] ?? 0) + gain;
+    parts.push(`${COMPONENTS[item.component].name} x${gain}`);
+  }
+  return `Recogiste ${parts.join(", ")}.`;
+}
+
+/** A fallen creature leaves its own components on the tile where it died. */
+function fell(draft: Run, enemy: Actor): string {
+  draft.enemies = draft.enemies.filter((e) => e.id !== enemy.id);
+  const def = ENEMIES[enemy.enemyId ?? "goblin"];
+  const rand = seeded((draft.rng ^ (enemy.x * 73856093) ^ (enemy.y * 19349663)) >>> 0);
+  const drops: Run["groundItems"] = [];
+  for (let i = 0; i < (def.dropCount ?? 1); i++) {
+    drops.push({
+      id: `drop-${enemy.id}-${i}`,
+      x: enemy.x,
+      y: enemy.y,
+      ...makeLoot(rand, draft.floor, def.drops[Math.floor(rand() * def.drops.length)]),
+    });
+  }
+  draft.groundItems.push(...drops);
+  const what = drops.map((d) => COMPONENTS[d.component].name.toLowerCase()).join(" y ");
+  return `${enemy.name} cae y deja ${what}.`;
+}
 
 export function createRun(opts: {
   classId: ClassId;
@@ -62,7 +157,8 @@ export function createRun(opts: {
   carry?: Carry;
 }): Run {
   const cls = CLASSES[opts.classId];
-  const roster = FLOOR_ENEMIES[opts.floor - 1] ?? FLOOR_ENEMIES[0];
+  const forest = opts.floor <= 0;
+  const roster: EnemyId[] = forest ? [] : (FLOOR_ENEMIES[opts.floor - 1] ?? FLOOR_ENEMIES[0]);
   const map = generateMap(opts.floor, opts.seed, roster.length);
   const maxHp = opts.carry?.maxHp ?? cls.hp;
   const maxMp = opts.carry?.maxMp ?? cls.mp;
@@ -108,45 +204,72 @@ export function createRun(opts: {
   });
   return {
     floor: opts.floor,
+    zone: map.zone,
     seed: opts.seed,
     rng: (opts.seed ^ (opts.floor * 131)) >>> 0,
     archetype: map.archetype,
+    w: map.w,
+    h: map.h,
     tiles: map.tiles,
     stairs: map.stairs,
     player,
     enemies,
     chests: map.chests,
     props: map.props,
-    potions: opts.carry?.potions ?? 2,
-    ethers: opts.carry?.ethers ?? 0,
-    materials: opts.carry?.materials ?? {},
+    items: opts.carry?.items ?? { potion: 2 },
+    components: opts.carry?.components ?? {},
+    equipment: opts.carry?.equipment ?? { weapon: null, armor: null, trinket: null },
+    bonus: opts.carry?.bonus ?? { atk: 0, def: 0, maxHp: 0 },
     groundItems: (() => {
-      const available: { x: number; y: number }[] = [];
-      for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
-        if (map.tiles[idx(x, y)] !== "floor" || (x === map.player.x && y === map.player.y) || (x === map.stairs.x && y === map.stairs.y)) continue;
-        if (map.enemyCells.some(c => c.x === x && c.y === y) || map.chests.some(c => c.x === x && c.y === y) || map.props.some(c => c.x === x && c.y === y)) continue;
-        available.push({ x, y });
-      }
-      let seed = (opts.seed ^ (opts.floor * 9176)) >>> 0;
-      const rand = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
-      const materials: MaterialId[] = ["herb", "ore", "crystal", "fang"];
-      const rarities: Rarity[] = ["comun", "comun", "comun", "poco_comun", "poco_comun", "raro", "epico"];
+      if (forest)
+        return map.loot.map((c, i) => ({
+          id: `gather-${opts.seed}-${i}`,
+          x: c.x,
+          y: c.y,
+          component: c.component,
+          rarity: "comun" as Tier,
+        }));
+      const rand = seeded(opts.seed ^ (opts.floor * 9176));
+      const spots = freeCells(map);
       const out: Run["groundItems"] = [];
-      for (let i = 0; i < Math.min(5, Math.floor(available.length / 5)); i++) {
-        const at = Math.floor(rand() * available.length);
-        const cell = available.splice(at, 1)[0];
+      // Big floors hold more caches than the old nine-by-eleven grids did.
+      const count = Math.min(11, Math.max(5, Math.floor(spots.length / 9)));
+      for (let i = 0; i < count; i++) {
+        const cell = spots.splice(Math.floor(rand() * spots.length), 1)[0];
         if (!cell) continue;
-        const rarity = rarities[Math.min(rarities.length - 1, Math.floor(Math.pow(rand(), 1.8) * rarities.length))];
-        out.push({ id: `loot-${opts.floor}-${i}`, ...cell, material: materials[Math.floor(rand() * materials.length)], rarity });
+        out.push({ id: `loot-${opts.floor}-${i}`, ...cell, ...makeLoot(rand, opts.floor) });
       }
       return out;
     })(),
   };
 }
 
+function seeded(seed: number) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 4294967296;
+  };
+}
+
+/** Floor cells nothing else already claims. */
+function freeCells(map: ReturnType<typeof generateMap>) {
+  const taken = (x: number, y: number) =>
+    (x === map.player.x && y === map.player.y) ||
+    (x === map.stairs.x && y === map.stairs.y) ||
+    map.enemyCells.some((c) => c.x === x && c.y === y) ||
+    map.chests.some((c) => c.x === x && c.y === y) ||
+    map.props.some((c) => c.x === x && c.y === y);
+  const out: { x: number; y: number }[] = [];
+  for (let y = 1; y < map.h - 1; y++)
+    for (let x = 1; x < map.w - 1; x++)
+      if (isWalkable(map.tiles[idx(map, x, y)]) && !taken(x, y)) out.push({ x, y });
+  return out;
+}
+
 export function blocked(run: Run, x: number, y: number, ignoreId?: string) {
-  if (!inb(x, y)) return true;
-  if (run.tiles[idx(x, y)] !== "floor") return true;
+  if (!inb(run, x, y)) return true;
+  if (!isWalkable(run.tiles[idx(run, x, y)])) return true;
   if (run.props.some((p) => p.blocks && p.x === x && p.y === y)) return true;
   if (run.player.x === x && run.player.y === y && ignoreId !== "player") return true;
   if (run.enemies.some((e) => e.x === x && e.y === y && e.id !== ignoreId)) return true;
@@ -172,8 +295,8 @@ export function los(run: Run, x0: number, y0: number, x1: number, y1: number) {
       y += sy;
     }
     if (x === x1 && y === y1) return true;
-    if (!inb(x, y)) return false;
-    if (run.tiles[idx(x, y)] === "wall") return false;
+    if (!inb(run, x, y)) return false;
+    if (isSolid(run.tiles[idx(run, x, y)])) return false;
     if (run.props.some((p) => p.blocks && p.x === x && p.y === y)) return false;
     if (run.enemies.some((e) => e.x === x && e.y === y)) return false;
     if (run.player.x === x && run.player.y === y) return false;
@@ -207,10 +330,10 @@ export function skillAims(run: Run): Aim[] {
   const p = run.player;
   if (p.classId === "maga") {
     const aims: Aim[] = [];
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
+    for (let y = 0; y < run.h; y++) {
+      for (let x = 0; x < run.w; x++) {
         if (!inRange(p.x, p.y, x, y, p.range)) continue;
-        if (run.tiles[idx(x, y)] === "wall") continue;
+        if (isSolid(run.tiles[idx(run, x, y)])) continue;
         if (!los(run, p.x, p.y, x, y)) continue;
         if (run.enemies.some((e) => cheb(e.x, e.y, x, y) <= 1)) aims.push({ x, y });
       }
@@ -281,6 +404,21 @@ export function applyAction(run: Run, action: Action): ActionResult {
     return useItem(draft, action.item);
   }
 
+  if (action.type === "forge") {
+    const recipe = recipeById(action.recipe);
+    if (!recipe) return { ok: false, reason: "No conoces esa receta." };
+    const made = forge(draft, recipe);
+    if (!made.ok) return made;
+    return {
+      ok: true,
+      run: draft,
+      banner: made.text,
+      floaters: [{ x: p.x, y: p.y, text: "Forjado", tone: "info", fx: "none" }],
+      sound: "ui",
+      pulse: null,
+    };
+  }
+
   if (action.type === "move") {
     if (!moveOptions(draft).some((o) => o.x === action.x && o.y === action.y)) {
       return { ok: false, reason: "No puedes pasar." };
@@ -290,21 +428,19 @@ export function applyAction(run: Run, action: Action): ActionResult {
     p.y = action.y;
     const chest = draft.chests.find((c) => c.x === action.x && c.y === action.y);
     let banner = "Avanzas un paso.";
-    const loot = draft.groundItems.find((item) => item.x === action.x && item.y === action.y);
-    if (loot) {
-      draft.groundItems = draft.groundItems.filter((item) => item.id !== loot.id);
-      draft.materials[loot.material] = (draft.materials[loot.material] ?? 0) + 1;
-      banner = `Recogiste ${loot.material} (${loot.rarity.replace("_", " ")}).`;
+    const loot = draft.groundItems.filter((item) => item.x === action.x && item.y === action.y);
+    if (loot.length) {
+      const ids = new Set(loot.map((item) => item.id));
+      draft.groundItems = draft.groundItems.filter((item) => !ids.has(item.id));
+      banner = collect(draft, loot);
     }
     if (chest) {
       draft.chests = draft.chests.filter((c) => c.id !== chest.id);
-      if (chest.item === "potion") {
-        draft.potions += 1;
-        banner = "Encontraste una poción.";
-      } else {
-        draft.ethers += 1;
-        banner = "Encontraste un éter.";
-      }
+      const roll = (chest.item === "potion" ? 0 : chest.item === "ether" ? 1 : 2) as 0 | 1 | 2;
+      const gift: ItemId[] = ["potion", "ether", "bomb"];
+      const item = gift[roll];
+      draft.items[item] = (draft.items[item] ?? 0) + 1;
+      banner = `Encontraste ${ITEMS[item].name.toLowerCase()} en el cofre.`;
     }
     return { ok: true, run: draft, banner, floaters: [], sound: "move", pulse: null };
   }
@@ -327,10 +463,7 @@ export function applyAction(run: Run, action: Action): ActionResult {
       },
     ];
     let banner = hit.crit ? `¡Crítico! ${enemy.name}: ${hit.dmg}.` : `Golpeas a ${enemy.name}: ${hit.dmg}.`;
-    if (enemy.hp <= 0) {
-      draft.enemies = draft.enemies.filter((e) => e.id !== enemy.id);
-      banner = `${enemy.name} cae.`;
-    }
+    if (enemy.hp <= 0) banner = fell(draft, enemy);
     return {
       ok: true,
       run: draft,
@@ -351,7 +484,7 @@ export function applyAction(run: Run, action: Action): ActionResult {
   if (p.classId === "maga") {
     const victims = draft.enemies.filter((e) => cheb(e.x, e.y, aim.x, aim.y) <= 1);
     const floaters: FloaterIn[] = [];
-    const dead = new Set<string>();
+    const kills: string[] = [];
     for (const enemy of victims) {
       const hit = strike(draft, p.atk, enemy.def, skillMult("maga"), critChance("maga", true));
       enemy.hp -= hit.dmg;
@@ -362,13 +495,13 @@ export function applyAction(run: Run, action: Action): ActionResult {
         tone: hit.crit ? "crit" : "hurt",
         fx: "orb",
       });
-      if (enemy.hp <= 0) dead.add(enemy.id);
+      if (enemy.hp <= 0) kills.push(enemy.name);
     }
-    draft.enemies = draft.enemies.filter((e) => !dead.has(e.id));
+    for (const enemy of victims.filter((e) => e.hp <= 0)) fell(draft, enemy);
     return {
       ok: true,
       run: draft,
-      banner: `Nova golpea a ${victims.length}.`,
+      banner: kills.length ? `Nova barre a ${kills.join(" y ")}.` : `Nova golpea a ${victims.length}.`,
       floaters,
       sound: "skill",
       pulse: null,
@@ -392,16 +525,13 @@ export function applyAction(run: Run, action: Action): ActionResult {
   if (p.classId === "asesino") {
     const bx = enemy.x + (enemy.x - p.x);
     const by = enemy.y + (enemy.y - p.y);
-    if (inb(bx, by) && !blocked(draft, bx, by, "player")) {
+    if (inb(draft, bx, by) && !blocked(draft, bx, by, "player")) {
       p.x = bx;
       p.y = by;
       banner = `Paso de sombra: ${hit.dmg}.`;
     }
   }
-  if (enemy.hp <= 0) {
-    draft.enemies = draft.enemies.filter((e) => e.id !== enemy.id);
-    banner = `${enemy.name} cae.`;
-  }
+  if (enemy.hp <= 0) banner = fell(draft, enemy);
   return {
     ok: true,
     run: draft,
@@ -412,39 +542,140 @@ export function applyAction(run: Run, action: Action): ActionResult {
   };
 }
 
+/** A bomb hits everything within one tile of the hero; it scales with depth. */
+export function bombDamage(floor: number) {
+  return 10 + floor * 2;
+}
+
 function useItem(draft: Run, item: ItemId): ActionResult {
   const p = draft.player;
-  if (item === "potion") {
-    if (draft.potions <= 0) return { ok: false, reason: "No tienes pociones." };
-    if (p.hp >= p.maxHp) return { ok: false, reason: "La vida ya está llena." };
-    const gain = Math.max(10, Math.round(p.maxHp * 0.38));
-    const before = p.hp;
-    p.hp = Math.min(p.maxHp, p.hp + gain);
-    draft.potions -= 1;
-    const healed = p.hp - before;
+  const name = ITEMS[item].name;
+  if ((draft.items[item] ?? 0) <= 0) return { ok: false, reason: `No tienes ${name.toLowerCase()}.` };
+  const spend = () => {
+    draft.items[item] = (draft.items[item] ?? 1) - 1;
+  };
+
+  if (item === "potion" || item === "panacea") {
+    if (item === "potion" && p.hp >= p.maxHp) return { ok: false, reason: "La vida ya está llena." };
+    if (item === "panacea" && p.hp >= p.maxHp && p.mp >= p.maxMp)
+      return { ok: false, reason: "Estás en plenitud." };
+    const beforeHp = p.hp;
+    const beforeMp = p.mp;
+    if (item === "potion") p.hp = Math.min(p.maxHp, p.hp + Math.max(10, Math.round(p.maxHp * 0.38)));
+    else {
+      p.hp = p.maxHp;
+      p.mp = p.maxMp;
+    }
+    spend();
+    const floaters: FloaterIn[] = [{ x: p.x, y: p.y, text: `+${p.hp - beforeHp}`, tone: "heal", fx: "none" }];
+    if (p.mp > beforeMp)
+      floaters.push({ x: p.x, y: p.y - 1, text: `+${p.mp - beforeMp}`, tone: "info", fx: "none" });
     return {
       ok: true,
       run: draft,
-      banner: `Bebes una poción (+${healed}).`,
-      floaters: [{ x: p.x, y: p.y, text: `+${healed}`, tone: "heal", fx: "none" }],
+      banner:
+        item === "potion"
+          ? `Bebes la poción (+${p.hp - beforeHp} HP).`
+          : `La panacea te devuelve: +${p.hp - beforeHp} HP, +${p.mp - beforeMp} MP.`,
+      floaters,
       sound: "ui",
       pulse: null,
     };
   }
-  if (draft.ethers <= 0) return { ok: false, reason: "No tienes éter." };
-  if (p.mp >= p.maxMp) return { ok: false, reason: "El maná ya está lleno." };
-  const gain = Math.max(4, Math.round(p.maxMp * 0.5));
-  const before = p.mp;
-  p.mp = Math.min(p.maxMp, p.mp + gain);
-  draft.ethers -= 1;
+
+  if (item === "ether") {
+    if (p.mp >= p.maxMp) return { ok: false, reason: "El maná ya está lleno." };
+    const before = p.mp;
+    p.mp = Math.min(p.maxMp, p.mp + Math.max(4, Math.round(p.maxMp * 0.5)));
+    spend();
+    return {
+      ok: true,
+      run: draft,
+      banner: `Bebes un éter (+${p.mp - before} MP).`,
+      floaters: [{ x: p.x, y: p.y, text: `+${p.mp - before}`, tone: "info", fx: "none" }],
+      sound: "ui",
+      pulse: null,
+    };
+  }
+
+  const victims = draft.enemies.filter((e) => cheb(e.x, e.y, p.x, p.y) <= 1);
+  if (!victims.length) return { ok: false, reason: "Nadie cerca de la explosión." };
+  const dmg = bombDamage(draft.floor);
+  const floaters: FloaterIn[] = victims.map((e) => ({
+    x: e.x,
+    y: e.y,
+    text: String(dmg),
+    tone: "crit" as const,
+    fx: "orb" as const,
+  }));
+  const names = victims.filter((e) => (e.hp -= dmg) <= 0).map((e) => e.name);
+  for (const enemy of victims) if (enemy.hp <= 0) fell(draft, enemy);
+  spend();
   return {
     ok: true,
     run: draft,
-    banner: `Bebes un éter (+${p.mp - before} MP).`,
-    floaters: [{ x: p.x, y: p.y, text: `+${p.mp - before}`, tone: "info", fx: "none" }],
-    sound: "ui",
-    pulse: null,
+    banner: names.length
+      ? `La bomba estalla: ${dmg} y barre a ${names.join(" y ")}.`
+      : `La bomba estalla contra ${victims.length}: ${dmg}.`,
+    floaters,
+    sound: "skill",
+    pulse: { id: "player", x: p.x, y: p.y },
   };
+}
+
+/**
+ * Spend the components and hand back whatever the recipe makes. Mutates the
+ * run it is given, so callers clone first.
+ */
+export function forge(
+  run: Run,
+  recipe: Recipe,
+): { ok: true; text: string } | { ok: false; reason: string } {
+  if (!tierAtLeast(unlockedTier(run.floor), recipe.tier))
+    return { ok: false, reason: `${recipe.name} pide piso ${TIER_FLOOR[recipe.tier]}.` };
+  if (!canAfford(run, recipe))
+    return { ok: false, reason: `Te falta: ${shortfallText(run, recipe)}.` };
+
+  for (const [id, n] of Object.entries(recipe.cost)) {
+    const key = id as ComponentId;
+    const left = (run.components[key] ?? 0) - (n ?? 0);
+    if (left > 0) run.components[key] = left;
+    else delete run.components[key];
+  }
+
+  const gives = recipe.gives;
+  if (gives && "component" in gives) {
+    run.components[gives.component] = (run.components[gives.component] ?? 0) + 1;
+    return { ok: true, text: `Forjas ${recipe.name}: ${recipe.effect.toLowerCase()}.` };
+  }
+  if (gives && "item" in gives) {
+    run.items[gives.item] = (run.items[gives.item] ?? 0) + 1;
+    return { ok: true, text: `${recipe.name} guardado en la mochila.` };
+  }
+  if (gives && "equip" in gives) {
+    const slot = gives.equip;
+    const worn = recipeById(run.equipment[slot] ?? "");
+    if (worn) shiftStats(run, worn, -1);
+    run.equipment[slot] = recipe.id;
+    shiftStats(run, recipe, 1);
+    return { ok: true, text: `Estrenas ${recipe.name} (${recipe.effect}).` };
+  }
+  run.bonus.atk += recipe.atk ?? 0;
+  run.bonus.def += recipe.def ?? 0;
+  run.bonus.maxHp += recipe.maxHp ?? 0;
+  shiftStats(run, recipe, 1);
+  return { ok: true, text: `${recipe.name} grabado en ti: ${recipe.effect}.` };
+}
+
+/** Only the piece you are wearing counts, so swapping one out gives the stats back. */
+function shiftStats(run: Run, recipe: Recipe, sign: 1 | -1) {
+  const p = run.player;
+  p.atk += (recipe.atk ?? 0) * sign;
+  p.def += (recipe.def ?? 0) * sign;
+  p.maxHp += (recipe.maxHp ?? 0) * sign;
+  p.maxMp += (recipe.maxMp ?? 0) * sign;
+  p.hp = Math.min(p.hp, p.maxHp);
+  p.mp = Math.min(p.mp, p.maxMp);
 }
 
 function nextStep(run: Run, enemy: Actor) {
@@ -460,7 +691,7 @@ function nextStep(run: Run, enemy: Actor) {
       const x = cur.x + dx;
       const y = cur.y + dy;
       const k = `${x},${y}`;
-      if (seen.has(k) || !inb(x, y)) continue;
+      if (seen.has(k) || !inb(run, x, y)) continue;
       const isGoal = x === goal.x && y === goal.y;
       if (!isGoal && blocked(run, x, y, enemy.id)) continue;
       seen.add(k);
